@@ -122,8 +122,10 @@ RUN_CREATE_RESULTS = False       # Convert raw .pkl files to test-result Excel
 RUN_COMBINE_RESULTS = False      # Combine valve and pump result files
 RUN_ADD_CALCULATIONS = False     # Add calibrated sensor calculations
 RUN_PLOTS = True
-SAVE_PLOTS = False
-SHOW_PLOTS = True
+SAVE_PLOTS = True
+SHOW_PLOTS = False
+SAVE_DATE_GROUPED_PLOTS = True
+SHOW_DATE_GROUPED_PLOTS = False
 OVERWRITE_EXISTING = False      # Recompute files instead of reusing them
 TEST_TYPE = "valve"
 INCLUDE_PUMP_RESULTS = True
@@ -482,6 +484,57 @@ def _make_plot(data, parameter, output_dir, *, pressure_plot, save, show):
     _finish_plot(fig, output_dir / filename, save=save, show=show)
 
 
+def _make_date_grouped_plots(data, output_dir, *, save, show):
+    """Create flow-through-style plots grouped by test start date.
+
+    These plots are written below the normal plot root, without changing the
+    filenames or contents of the existing time and pressure plots.
+    """
+    grouped = data.copy()
+    grouped["DATE"] = pd.to_datetime(grouped["DATE"], errors="coerce")
+    grouped = grouped.dropna(subset=["DATE", "Float Number"])
+    if grouped.empty:
+        return
+
+    # Assign every sample in a run to that run's first calendar date. This
+    # prevents a test crossing midnight from being split between two files.
+    start_dates = grouped.groupby("Float Number")["DATE"].transform("min")
+    grouped["Test Date"] = start_dates.dt.strftime("%Y-%m-%d")
+    grouped_output = output_dir / "date_grouped"
+
+    parameters = [p for p in PLOT_PARAMETERS if p in grouped.columns]
+    if "PRES" in grouped.columns and "PRES" not in parameters:
+        parameters.append("PRES")
+
+    for parameter in parameters:
+        parameter_data = grouped.loc[grouped[parameter].notna()].copy()
+        for test_date, date_data in parameter_data.groupby("Test Date", sort=True):
+            date_data = date_data.sort_values(["Float Number", "DATE"])
+            title = f"{LABELS.get(parameter, parameter)} vs. Date — {test_date}"
+            fig = px.scatter(
+                date_data,
+                x="DATE",
+                y=parameter,
+                color="Float Number",
+                labels=LABELS,
+                title=title,
+                render_mode="webgl",
+                hover_data={
+                    "Float Number": True,
+                    "DATE": "|%Y-%m-%d %H:%M:%S",
+                    "PRES": ":.1f" if "PRES" in date_data else False,
+                    parameter: ":.4g",
+                },
+            )
+            _common_layout(fig, title, "Date/time", LABELS.get(parameter, parameter))
+            _finish_plot(
+                fig,
+                grouped_output / parameter / f"{test_date}.html",
+                save=save,
+                show=show,
+            )
+
+
 def make_plots(serial_numbers, paths):
     # Load all floats once, then create the selected plots from the combined
     # in-memory DataFrame rather than repeatedly loading each float per plot.
@@ -515,6 +568,14 @@ def make_plots(serial_numbers, paths):
         if column == "Buoyancy Position":
             simple = simple.loc[simple[column] <= 951].copy()
         _make_plot(simple, column, output_dir, pressure_plot=False, save=SAVE_PLOTS, show=SHOW_PLOTS)
+    if SAVE_DATE_GROUPED_PLOTS or SHOW_DATE_GROUPED_PLOTS:
+        print("[plots] Creating date-grouped plots")
+        _make_date_grouped_plots(
+            data,
+            output_dir,
+            save=SAVE_DATE_GROUPED_PLOTS,
+            show=SHOW_DATE_GROUPED_PLOTS,
+        )
 
 
 def main():

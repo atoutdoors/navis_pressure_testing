@@ -124,7 +124,12 @@ pressure_test_results\<valve|pump>\<serial>_pressure_test_results_<type>.xlsx
 pressure_test_results\combined_test_results\<serial>_pressure_test_results.xlsx
 pressure_test_results\combined_test_results\<serial>_calcs_.xlsx
 Z:\www\bgc\pressure_test\*.html
+Z:\www\bgc\pressure_test\date_grouped\<parameter>\<YYYY-MM-DD>.html
 ```
+
+Date-grouped plots use the same plot root as the existing figures and are
+organized by parameter and test-start date, so they can be linked from the
+pressure-test index without changing the existing plot URLs.
 
 The plotting stage ignores samples with missing pressure and limits plotted pressure to 3000 dbar. Open the generated HTML files in a browser to use Plotly zooming, hovering, and legend selection.
 

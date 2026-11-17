@@ -1,107 +1,148 @@
-# Pressure Test Visualization
+# Navis pressure testing
 
-This script processes pressure-test data and creates interactive Plotly plots.
-It combines the work previously handled by several separate scripts.
+This repository contains the scripts for running a Navis pressure test, converting the raw measurements, applying sensor calibrations, and creating interactive plots.
 
-## What it does
+The recommended analysis entry point is [`ptest_visualization_optimized.py`](ptest_visualization_optimized.py). It replaces the older, separate `create_results_1.py`, `combine_results_2opt.py`, `add_calcs_3.py`, and `ptest_analysis.py` workflow while keeping those scripts in `pressure_testing/analysis/` for reference.
 
-The script can:
+## 1. Prepare the computer
 
-1. Convert raw pickle files into Excel result files.
-2. Combine valve and pump test results.
-3. Calculate calibrated pH, oxygen, FDOM, chlorophyll, and backscatter values.
-4. Create time-series and pressure plots.
-5. Save plots as interactive HTML files.
+The collection scripts communicate with the float through `navis_com`, which is imported from the separate `bgc-testing` repository. Before collecting data:
 
-## Before running
+1. Connect the float and identify its serial COM port.
+2. Make sure the `bgc-testing` repository is available at the path in `pressure_test.py` / `pressure_test2.py`, or update the `sys.path.append(...)` line in those scripts.
+3. Map the WHOI shared drive as `G:`. The analysis script expects these folders:
 
-Install the required packages:
+   ```text
+   G:\Shared drives\WHOI Argo\BGC\Float Tracking\pressure_test_data\
+   G:\Shared drives\WHOI Argo\BGC\Float Tracking\pressure_test_results\
+   ```
 
-```bash
-pip install numpy pandas plotly openpyxl gsw requests
-```
+4. Install Python and the analysis dependencies. From this repository, run:
 
-Make sure the `G:` and `Z:` drives are mapped on Windows:
+   ```text
+   setup_pressure_test_env.bat
+   ```
 
-- `G:` contains the pressure-test input and result files.
-- `Z:` contains the website plot directory.
+   This creates `.venv` and installs NumPy, pandas, Plotly, openpyxl, gsw, and requests. Activate it for later commands with:
 
-The script contains the sensor-calculation and API functions internally, so no separate `calc_sensor.py` or `db_api.py` file is required.
+   ```text
+   .venv\Scripts\activate
+   ```
 
-## Adding a new float
+The calibrated analysis requests the float's predeployment coefficients from `https://db.whoifloatgroup.org`, so internet access is required for the calibration stage.
 
-Add the serial number and pickle-file date to `NEW_FLOATS` near the top of the script:
+## 2. Collect raw pressure-test data
+
+Use one of the two collectors in `pressure_testing/`:
+
+- `pressure_test.py`: standard valve pressure test columns.
+- `pressure_test2.py`: same test with additional OCR and tilt columns.
+
+Before running, edit the parameter block near the top of the selected script:
 
 ```python
-NEW_FLOATS = {
-    "2006": "20260806",
-}
+run_until = "2026-12-31 00:00"   # stop time, YYYY-MM-DD HH:MM
+measurement_interval = 0         # minutes between measurements
+exercise_interval = 0.5          # hours between HP-valve exercises
+exercise_n = 3                    # open/close cycles per exercise
+save_directory = "G://Shared drives/WHOI Argo/BGC/Float Tracking/pressure_test_data/valve/2006/"
 ```
 
-The date must match the date in the pickle filename:
+Use a folder named for the float serial number under the test type (`valve` or `pump`). This matches the layout expected by the analysis script:
 
 ```text
-F2006_20260806.pkl
+pressure_test_data\valve\2006\F2006_YYYYMMDD.pkl
 ```
 
-Leave this setting enabled to process only newly added floats:
+The current collector asks for the COM port when it starts, wakes the float, records the serial number, samples pressure/sensor data, exercises the HP valve, and continuously overwrites the day's pickle file with the latest complete DataFrame. The float should be at the required starting buoyancy position before the run. Keep the terminal open while the test is running.
+
+Run from the repository root, for example:
+
+```text
+.venv\Scripts\python.exe pressure_testing\pressure_test.py
+```
+
+When prompted, enter the COM port (for example `COM7`). If a pickle file for that float and date already exists, the script asks whether it may overwrite it. On an exception, the script attempts to freeze the float and close the serial connection; verify the float state before restarting.
+
+If the collector was left with its original `save_directory` ending at `...\pressure_test_data\valve\`, move the resulting `F<serial>_<date>.pkl` into the serial-number folder shown above, or change the analysis input path accordingly.
+
+## 3. Convert, calibrate, and plot the data
+
+Edit the configuration section near the top of [`ptest_visualization_optimized.py`](ptest_visualization_optimized.py):
 
 ```python
-PROCESS_ONLY_NEW_FLOATS = True
+USER = "Aidan"
+TEST_TYPE = "valve"
+INCLUDE_PUMP_RESULTS = True
+
+NEW_FLOATS = {
+    "2006": "20260806",  # serial number: date in the pickle filename
+}
+
+RUN_CREATE_RESULTS = True
+RUN_COMBINE_RESULTS = True
+RUN_ADD_CALCULATIONS = True
+RUN_PLOTS = True
+OVERWRITE_EXISTING = False
 ```
 
-After the calculated file is created successfully, the script permanently adds the serial number to `FLOAT_SERIAL_NUMBERS` and removes it from `NEW_FLOATS`.
+The date in `NEW_FLOATS` must exactly match the raw file name, such as `F2006_20260806.pkl`. Then run:
 
-## Main settings
+```text
+.venv\Scripts\python.exe ptest_visualization_optimized.py
+```
+
+The four stages are:
+
+1. **Create results** — converts each raw pickle into `pressure_test_results\valve\<serial>_pressure_test_results_valve.xlsx`.
+2. **Combine results** — combines valve and, when enabled, pump workbooks into `pressure_test_results\combined_test_results\<serial>_pressure_test_results.xlsx`.
+3. **Add calculations** — retrieves calibration coefficients and writes calibrated variables such as pH, oxygen, FDOM, chlorophyll, backscatter, and potential temperature to `<serial>_calcs_.xlsx`.
+4. **Plot** — writes interactive Plotly HTML files to `Z:\www\bgc\pressure_test`.
+
+The script reuses existing files by default. Set `OVERWRITE_EXISTING = True` when the raw data or configuration changed and the intermediate workbooks must be regenerated. After a new float is successfully calculated, the script adds its serial number to `FLOAT_SERIAL_NUMBERS` and clears `NEW_FLOATS` in the script.
+
+### Plot existing calculated data only
+
+To regenerate plots without repeating conversion or calibration:
 
 ```python
 RUN_CREATE_RESULTS = False
 RUN_COMBINE_RESULTS = False
 RUN_ADD_CALCULATIONS = False
 RUN_PLOTS = True
-```
-
-Set a stage to `True` when you want it to run. For a new raw pickle file, use:
-
-```python
-RUN_CREATE_RESULTS = True
-RUN_COMBINE_RESULTS = True
-RUN_ADD_CALCULATIONS = True
-RUN_PLOTS = True
-```
-
-Existing output files are reused by default. Set this to `True` to recalculate them:
-
-```python
-OVERWRITE_EXISTING = True
-```
-
-## Plot settings
-
-```python
-SAVE_PLOTS = True
-SHOW_PLOTS = False
+PROCESS_ONLY_NEW_FLOATS = False
 PLOT_ALL_FLOATS = True
 ```
 
-- `SAVE_PLOTS`: saves interactive HTML plots.
-- `SHOW_PLOTS`: opens plots while the script runs.
-- `PLOT_ALL_FLOATS`: includes existing floats and newly processed floats in the plots.
+Set `PLOT_PARAMETERS` to a shorter list if only selected variables are needed. Each selected variable gets a test-time plot and a pressure plot. Pressure is displayed with increasing depth downward. The output directory contains files such as `TEMP.html` and `P vs. TEMP.html`.
 
-Plots are saved to:
+## 4. Output layout
 
 ```text
-Z:\www\bgc\pressure_test
+pressure_test_data\<valve|pump>\<serial>\F<serial>_<YYYYMMDD>.pkl
+pressure_test_results\<valve|pump>\<serial>_pressure_test_results_<type>.xlsx
+pressure_test_results\combined_test_results\<serial>_pressure_test_results.xlsx
+pressure_test_results\combined_test_results\<serial>_calcs_.xlsx
+Z:\www\bgc\pressure_test\*.html
 ```
 
-The script prints the exact output path for every saved plot.
+The plotting stage ignores samples with missing pressure and limits plotted pressure to 3000 dbar. Open the generated HTML files in a browser to use Plotly zooming, hovering, and legend selection.
 
-## Running the script
+## 5. Older scripts and notebooks
 
-From a terminal or Python environment, run:
+The scripts under `pressure_testing/analysis/` are the original manual workflow:
 
-```bash
-python ptest_visualization_optimized.py
-```
+1. `create_results_1.py` — edit `name`, `SN`, `test`, and `date` to create a per-test Excel file.
+2. `combine_results_2opt.py` — edit `floatnum` and combine test workbooks. Pump input is commented out in the checked-in version.
+3. `add_calcs_3.py` — edit `SN` and apply calibration equations to create `<serial>_calcs_.xlsx`.
+4. `ptest_analysis.py` or `analysis_4.py` — add elapsed time, buoyancy position, and oxygen-solubility analysis to `<serial>_calcs_added.xlsx`.
 
-The script prints progress for each stage and each float. If there are no new floats in `NEW_FLOATS`, the new-float stages are skipped and existing calculated files can still be used to regenerate plots.
+The notebooks in the same directory are exploratory plotting and merging tools. Use the optimized script for new tests unless a legacy notebook or intermediate calculation is specifically needed.
+
+## Troubleshooting
+
+- **Raw file not found:** verify the serial-number folder, test type, and date in `NEW_FLOATS` match the actual pickle path.
+- **No plots are created:** confirm that `<serial>_calcs_.xlsx` exists, `RUN_PLOTS` and `SAVE_PLOTS` are `True`, and `PLOT_PARAMETERS` contains columns in that workbook.
+- **Calibration failure:** check internet access and confirm that the WHOI calibration API has metadata for the float and the expected sensor names.
+- **Drive/path errors:** map `G:` and `Z:`, or update `DRIVE_ROOTS` and `PLOT_ROOTS` in the visualization script for the local machine.
+- **COM/`navis_com` errors:** check the COM port, float connection, and the `bgc-testing` repository path used by the collector.

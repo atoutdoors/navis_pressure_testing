@@ -11,8 +11,12 @@ import re
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.io as pio
 import requests
 from numpy.polynomial.polynomial import polyval
+
+# Open interactive figures in the system browser when SHOW_PLOTS is enabled.
+pio.renderers.default = "browser"
 
 
 # ---------------------------------------------------------------------------
@@ -118,8 +122,8 @@ RUN_CREATE_RESULTS = False       # Convert raw .pkl files to test-result Excel
 RUN_COMBINE_RESULTS = False      # Combine valve and pump result files
 RUN_ADD_CALCULATIONS = False     # Add calibrated sensor calculations
 RUN_PLOTS = True
-SAVE_PLOTS = True
-SHOW_PLOTS = False
+SAVE_PLOTS = False
+SHOW_PLOTS = True
 OVERWRITE_EXISTING = False      # Recompute files instead of reusing them
 TEST_TYPE = "valve"
 INCLUDE_PUMP_RESULTS = True
@@ -395,14 +399,22 @@ def _finish_plot(fig, output_path: Path, *, save: bool, show: bool):
 
 
 def _common_layout(fig, title, x_title, y_title):
-    fig.update_layout(title={"text": title, "x": 0.5, "xanchor": "center"}, template="plotly_white", hovermode="closest", legend_title_text="Float", margin={"l": 80, "r": 30, "t": 70, "b": 70}, font={"size": 13})
+    fig.update_layout(
+        title={"text": title, "x": 0.5, "xanchor": "center"},
+        template="plotly_white",
+        hovermode="closest",
+        legend_title_text="Float",
+        legend={"font": {"size": 11}, "itemsizing": "constant"},
+        margin={"l": 80, "r": 30, "t": 70, "b": 70},
+        font={"size": 13},
+    )
     fig.update_xaxes(title=x_title, showgrid=True, gridcolor="#e5e7eb", zeroline=False)
     fig.update_yaxes(title=y_title, showgrid=True, gridcolor="#e5e7eb", zeroline=False)
 
 
 def _serial_sort_key(label):
     """Sort legend labels by numeric float serial number."""
-    serial_number = str(label).split(",", 1)[0].strip()
+    serial_number = str(label).split(" — ", 1)[0].strip()
     try:
         return (0, int(serial_number))
     except ValueError:
@@ -410,12 +422,57 @@ def _serial_sort_key(label):
 
 
 def _make_plot(data, parameter, output_dir, *, pressure_plot, save, show):
-    # The same helper creates both time-series and pressure plots.  Pressure is
-    # reversed below because increasing pressure represents increasing depth.
+    # The same helper creates both time-series and pressure plots.  Time-series
+    # plots use connected lines; pressure profiles use small translucent points
+    # so dense data does not turn into a solid block of color.
     x, y = (parameter, "PRES") if pressure_plot else ("Time Since Test Start (hours)", parameter)
     title = f"{LABELS.get(parameter, parameter)} vs. {'Pressure' if pressure_plot else 'Test Time'}"
-    legend_order = sorted(data["Float Number"].dropna().unique(), key=_serial_sort_key)
-    fig = px.scatter(data, x=x, y=y, color="Float Number", category_orders={"Float Number": legend_order}, render_mode="webgl", labels=LABELS, title=title, hover_data={"Float Number": True, "PRES": ":.1f", parameter: ":.4g"})
+    plot_data = data.copy()
+    # Keep the test date in the grouping key so separate tests for the same
+    # float do not get connected into one trace.  Keep the full timestamp in
+    # Float Number for hover details.
+    float_parts = plot_data["Float Number"].astype(str).str.extract(
+        r"^([^,]+),\s*Test Start:\s*(\d{4}-\d{2}-\d{2})"
+    )
+    plot_data["Float"] = (
+        float_parts[0].fillna(plot_data["Float Number"].astype(str))
+        + " — "
+        + float_parts[1].fillna("")
+    ).str.rstrip(" —")
+    legend_order = sorted(plot_data["Float"].dropna().unique(), key=_serial_sort_key)
+    hover_data = {
+        "Float Number": True,
+        "Float": False,
+        "PRES": ":.1f",
+        parameter: ":.4g",
+    }
+    if pressure_plot:
+        fig = px.scatter(
+            plot_data,
+            x=x,
+            y=y,
+            color="Float",
+            category_orders={"Float": legend_order},
+            render_mode="webgl",
+            opacity=0.55,
+            labels=LABELS,
+            title=title,
+            hover_data=hover_data,
+        )
+        fig.update_traces(marker={"size": 4})
+    else:
+        plot_data = plot_data.sort_values(["Float", "Time Since Test Start (hours)"])
+        fig = px.line(
+            plot_data,
+            x=x,
+            y=y,
+            color="Float",
+            category_orders={"Float": legend_order},
+            labels=LABELS,
+            title=title,
+            hover_data=hover_data,
+        )
+        fig.update_traces(line={"width": 1.5})
     _common_layout(fig, title, LABELS.get(x, x), LABELS.get(y, y))
     if pressure_plot:
         fig.update_yaxes(autorange="reversed")
